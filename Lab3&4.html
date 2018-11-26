@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Lab 3 & 4 - Lighting & Texture Mapping</title>
+	<meta charset="UTF-8" />
+		
+	<style type="text/css">	
+		#myCanvas{
+		background-color: rgb(255, 255, 255);
+		}
+		#myCanvas2{
+			background-color: rgb(0,0,0);
+		}
+	</style>	
+</head>
+<body>
+	<div><input type="file" id="files" name="files[]" multiple /></div>
+	<div><canvas id="myCanvas2" width = "500" height="500"></canvas></div>
+	<div><canvas id="myCanvas" width = "500" height="500"></canvas></div>
+	<div id="display1">Camera Position: (0, 0, -5)</div>
+	<div id="display2">Distance = 3</div>
+	<div id="display3">1 coordinate unit contains 50 pixels</div>
+	<div id="display4">Xie Wu</div>
+	<script type="text/javascript">
+	var textureData;
+	var drawing = document.getElementById("myCanvas2");
+	var context = drawing.getContext("2d");
+	context.fillStyle = "rgb(130,130,130)";
+	for(var i = 0; i < 25;i++){
+		context.fillRect(0,i*20,500,10);
+	}
+	context.fillStyle = "rgb(255,255,255)";
+	for(var i = 0; i < 25;i++){
+		context.fillRect(0,i*20+10,500,10);
+	}
+	textureData = context.getImageData(0,0,500,500);
+	//Frame buffer
+	var frameBuffer = new Array(500);
+	for(var i = 0; i< 500;i++){
+		frameBuffer[i] = new Array(500);
+	}
+	//Z-buffer
+	var zBuffer = new Array(500);
+	for(var i = 0; i< 500;i++){
+		zBuffer[i] = new Array(500);
+	}
+	//The coordinate of the points on the object
+	var pointsArray = [];
+	//The index of points
+	var cubeIndex = [];
+	//Camera position
+	var cameraPoint = [0, 0, -5];
+	//Stores the coordinates after perspective transformation
+	var finalCoordinate = [];
+	//Stores all the vertex normals
+	var vertexNormal = [];
+	//Stores all the polygon normals
+	var polyNormal = [];
+	//Stores the index of all the relative polygons of a point
+	var pointPolygons = [];
+	//Shading model. Phong by default.
+	var shadingModel = "phong";
+	//Canvas object
+	var drawing = document.getElementById("myCanvas");
+	var result1 = document.getElementById("display1");
+	var result2 = document.getElementById("display2");
+	var result3 = document.getElementById("display3");
+	var result4 = document.getElementById("display4");
+
+	//Stores different light sources of diffuse and specular light
+	var lightsArray = [];
+	var dAndSLight1 = new LightObject("light(1,1,1)",[2,0,-1]);
+	//The second light source
+	var dAndSLight2 = new LightObject("light(1,1,1)",[1,0,-1]);
+	var ambientLight = new AmbientLightObject("light(0.5,0.5,0.5)");
+	var renderingObject = new shadingObject([0.3,0,0],[0.8,0.4,0.1],[1,1,1]);
+
+	//Store the diffuse and specular light sources into lightArray
+	lightsArray = [dAndSLight1];
+
+	var context = drawing.getContext("2d");
+
+
+	//Store the coordinates from a position matrix into vectors
+	function matrixToCoodinate(matrix){
+		var resultVector = [];
+		resultVector[0] = (new Number(matrix[0][0]/matrix[3][0])).toFixed(7);
+		resultVector[1] = (new Number(matrix[1][0]/matrix[3][0])).toFixed(7);
+		resultVector[2] = matrix[2][0];
+		return resultVector;
+	}
+	//Vector calculations
+	//Addition
+	function vectorAddition(vector1,vector2){
+		var result = [];
+		result[0] = vector1[0] + vector2[0];
+		result[1] = vector1[1] + vector2[1];
+		result[2] = vector1[2] + vector2[2];
+		return result;
+	}
+	//Subtraction
+	function vectorSubstraction(vector1,vector2){
+		var result = [];
+		result[0] = vector1[0] - vector2[0];
+		result[1] = vector1[1] - vector2[1];
+		result[2] = vector1[2] - vector2[2];
+		return result;
+	}
+	//Dot production
+	function dotProduction(vector1, vector2){
+		var result;
+		result = vector1[0]*vector2[0]+vector1[1]*vector2[1]+vector1[2]*vector2[2];
+		return result;
+	}
+	//Cross prodcution
+	function crossProduction(vector2, vector1){
+	 	var result = [];
+        result[0]=vector1[1]*vector2[2]-vector1[2]*vector2[1];
+        result[1]=vector1[2]*vector2[0]-vector1[0]*vector2[2];
+        result[2]=vector1[0]*vector2[1]-vector1[1]*vector2[0];
+        return result;
+	}
+
+	//Matrix multiplication
+	function matrixMultiply(matrix1, matrix2) {
+ 		var aNumRows = matrix1.length, aNumCols = matrix1[0].length,
+      	bNumRows = matrix2.length, bNumCols = matrix2[0].length,
+      	resultMatrix = new Array(aNumRows);          //Rows
+  		for (var r = 0; r < aNumRows; ++r) {
+    		resultMatrix[r] = new Array(bNumCols);   //The current row
+   			for (var c = 0; c < bNumCols; ++c) {
+      			resultMatrix[r][c] = 0;              //The current cell
+				for (var i = 0; i < aNumCols; ++i) {
+					resultMatrix[r][c] += matrix1[r][i] * matrix2[i][c];
+				}
+			}
+  		}
+  		return resultMatrix;
+	}
+	//Divide the elements in a matrix by w
+	function matrixToCoor(matrix){
+		var resultVector = [];
+		var temptVector1 =[],temptVector2= [], temptVector3= [];
+		temptVector1[0] = (new Number(matrix[0]/matrix[3])).toFixed(7);
+		temptVector2[0] = (new Number(matrix[1]/matrix[3])).toFixed(7);
+		temptVector3[0] = new Number(matrix[2]/matrix[3]);
+		resultVector += temptVector1;
+		resultVector += temptVector2;
+		resultVector += temptVector3;
+		return resultVector;
+	}
+	//Perspective transformation of a point
+	function perspectiveTrans(pointMatrix, d){
+		var perspectiveMatrix = [];
+		var resultMatrix;
+		var dByOne = (new Number(1/d)).toFixed(7);
+		perspectiveMatrix = [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,dByOne,0]];
+		resultMatrix = matrixMultiply(perspectiveMatrix,pointMatrix);
+
+		return resultMatrix;
+	}
+	//Store the coordinates from an array into a matrix
+	function coorArrayToMatrix(coorArray, w){
+		var inputNumber = arguments.length;
+		var resultMatrix;
+		if(inputNumber == 1){
+			resultMatrix = [[coorArray[0]],[coorArray[1]],[coorArray[2]],[1]];
+		}else{
+			resultMatrix = [[coorArray[0]],[coorArray[1]],[coorArray[2]],[w]];
+		}
+		return resultMatrix;
+	}
+	//Calculate the coordinate of the midpoint on a plane to calculate its normal vector
+	function getMidPoint(coordinatePoint){
+		var result = [];
+		result[0] = coordinatePoint[0]/2;
+		result[1] = coordinatePoint[1]/2;
+		result[2] = coordinatePoint[2]/2;
+		return result;
+
+	}
+	
+	//Check the visibility of a plane
+	function checkVisibility(cameraPoint, coordinateArray){
+		var visibility = [];
+		var planeNormalVector;
+		var lineOfSight;
+		var lineVector1;
+		var lineVector2;
+		var midPoint;
+		for(var i=0; i<cubeIndex.length;i++){
+			lineVector1 = vectorSubstraction(coordinateArray[cubeIndex[i][1]-1],coordinateArray[cubeIndex[i][0]-1]);
+			if(cubeIndex[i].length<=3){
+				lineVector2 = vectorSubstraction(coordinateArray[cubeIndex[i][2]-1],coordinateArray[cubeIndex[i][0]-1]);
+			}else{
+			lineVector2 = vectorSubstraction(coordinateArray[cubeIndex[i][3]-1],coordinateArray[cubeIndex[i][0]-1]);}
+			//Calculate the midpoint
+			midPoint = getMidPoint(vectorAddition(coordinateArray[cubeIndex[i][2]-1],coordinateArray[cubeIndex[i][0]-1]));
+			//Calculate the normal vector
+			planeNormalVector = crossProduction(lineVector1,lineVector2);
+			polyNormal[i] = planeNormalVector;
+			//Calculate the line of sight
+			lineOfSight = vectorSubstraction(cameraPoint,midPoint);
+			if(dotProduction(lineOfSight, planeNormalVector)>0){
+				visibility[i] = true;
+			} else {
+				visibility[i] = false;
+			}
+		}
+		return visibility;
+	}
+	
+	//Convert the values of coordinates after perspective transformation into integers
+	function getIntegerCoordinate(cubeIndex, coordinatesArray){
+		var resultSet = [];
+		if(shadingModel == "gouraud"){
+			for(var i = 0;i < cubeIndex.length;i++){
+				var temptCoordinate = [];
+				temptCoordinate[0] = Math.ceil((coordinatesArray[cubeIndex[i]-1][0])*50);
+				temptCoordinate[1] = Math.ceil((coordinatesArray[cubeIndex[i]-1][1])*50);
+				temptCoordinate[2] = (coordinatesArray[cubeIndex[i]-1][2])*50;
+				//Light intensity of the vertex
+				temptCoordinate[3] = calculateLight(ambientLight,lightsArray,renderingObject,vertexNormal[cubeIndex[i]]);
+				resultSet[i] = temptCoordinate;
+			}
+		} else if (shadingModel == "phong"){
+			for(var i = 0;i < cubeIndex.length;i++){
+				var temptCoordinate = [];
+				temptCoordinate[0] = Math.ceil((coordinatesArray[cubeIndex[i]-1][0])*50);
+				temptCoordinate[1] = Math.ceil((coordinatesArray[cubeIndex[i]-1][1])*50);
+				temptCoordinate[2] = (coordinatesArray[cubeIndex[i]-1][2])*50;
+				//Normal of the vertex
+				temptCoordinate[3] = vertexNormal[cubeIndex[i]];
+				resultSet[i] = temptCoordinate;
+			}
+		} else {
+			for(var i = 0;i < cubeIndex.length;i++){
+				var temptCoordinate = [];
+				temptCoordinate[0] = Math.ceil((coordinatesArray[cubeIndex[i]-1][0])*50);
+				temptCoordinate[1] = Math.ceil((coordinatesArray[cubeIndex[i]-1][1])*50);
+				temptCoordinate[2] = coordinatesArray[cubeIndex[i]-1][2]*50;
+				resultSet[i] = temptCoordinate;
+			}
+		}
+		return resultSet;
+	}
+	//Check if a line is the bottom line or not
+	function checkBottom(planePoints,yValue){
+		var bottomOrNot = true;
+		for(var i = 0; i < planePoints.length; i++){
+			if(planePoints[i][1]>= yValue){}
+			else{
+				bottomOrNot = false;
+			}
+		}
+		return bottomOrNot;
+	}
+	//Create an edge table
+	function createTable(planePoints){
+		var tableLine = [];
+		var horizontalLX,horizontalRX,Y;
+		var point1,point2,Ymax,Ymin,Xmin, slope,topZ,bottomZ,topE,bottomE;
+		var eNumber = 0;
+		for(var n = 0 ; n < planePoints.length; n++){
+			if(n < (planePoints.length-1)){
+				point1 = planePoints[n];
+				point2 = planePoints[n+1];
+			} else {
+				point1 = planePoints[n];
+				point2 = planePoints[0];
+			}
+			if (point2[1] > point1[1]){
+
+				Ymax = point2[1];
+				Ymin = point1[1];
+				Xmin = point1[0];
+				topZ = point2[2];
+				bottomZ = point1[2];
+				Slope = (point1[0]-point2[0])+"/"+(point1[1]-point2[1]);
+				topE = point2[3];
+				bottomE = point1[3];
+				tableLine[eNumber] = [Ymax,Ymin,Xmin,Slope,topZ,bottomZ,topE,bottomE];
+				eNumber++;
+			} else if (point2[1] < point1[1]){
+				Ymax = point1[1];
+				Ymin = point2[1];
+				Xmin = point2[0];
+				topZ = point1[2];
+				bottomZ = point2[2];
+				Slope = (point1[0]-point2[0])+"/"+(point1[1]-point2[1]);
+				topE = point1[3];
+				bottomE = point2[3];
+				tableLine[eNumber] = [Ymax,Ymin,Xmin,Slope,topZ,bottomZ,topE,bottomE];
+				eNumber++;
+			} else {
+				if(checkBottom(planePoints,point2[1])){
+					if(point2[0] > point1[0]){
+						horizontalRX = point2[0];
+						horizontalLX = point1[0];
+						Y = point2[1];
+					} else {
+						horizontalRX = point1[0];
+						horizontalLX = point2[0];
+						Y= point2[1];
+					}
+				}
+			}
+		}
+		return tableLine;
+	}
+	
+	//Phong and Gouraud shading model
+	function storePolygonGouraudAndPhongShading(table){
+		var AET = [];
+		var currentYValue;
+		var leftX,leftZ,leftE;
+		var rightX,rightZ,rightE;
+		var topY = findYmax(table);
+		var bottomY = findYmin(table);
+		
+		for(var i = bottomY; i < topY; i++){
+			currentYValue = i;
+			for(var j = 0 ; j < table.length; j++){
+				if(table[j][1]==currentYValue){
+					AET = addEdgeToAET(AET,table[j]);
+				}else{}
+			}
+			if( AET.length >0){
+				removeEdgeFromAET(AET,currentYValue);
+				AET.sort(sortAETByX);
+				for(var k = 0; k < AET.length;k++){
+					if(k%2==1){
+						rightX = AET[k][2];
+						rightZ = getEdgeZ(AET[k][0],AET[k][1],AET[k][4],AET[k][5],currentYValue);
+						rightE = getEdgeE(AET[k][0],AET[k][1],AET[k][6],AET[k][7],currentYValue);
+						if (shadingModel == "gouraud") {    //Gouraud shading
+							//Interpolation of light intensity
+							updateFrameBufferByLineGouraud(leftX,rightX,leftZ,rightZ,currentYValue,leftE,rightE);
+						} else {    //Phong shading
+							//Interpolation of vertex normals
+							updateFrameBufferByLinePhong(leftX,rightX,leftZ,rightZ,currentYValue,leftE,rightE);
+						}
+					} else {
+						leftX = AET[k][2];
+						leftZ = getEdgeZ(AET[k][0],AET[k][1],AET[k][4],AET[k][5],currentYValue);
+						leftE = getEdgeE(AET[k][0],AET[k][1],AET[k][6],AET[k][7],currentYValue);
+
+					}
+				}
+				//Update x values in AET as y values increases
+				updateXcoordinate(AET);
+			}
+		}
+	}
+	//Calculate the Z value and vertex normal and update the frame and z buffer for Phong shading
+	function updateFrameBufferByLinePhong (leftX, rightX, leftZ, rightZ, currentY, leftNormal, rightNormal) {
+		var temptPointNormal = new Array(3);
+		var currentColorString;
+		var temptLightString;
+		leftX = Math.ceil(leftX);
+		rightX = Math.ceil(rightX);
+		for(var i = leftX; i <=rightX;i++){
+			var temptZBufferValue = getZBufferValue(i,currentY);
+			var temptCurentZValue = rightZ-(rightZ-leftZ)*((rightX- i)/(rightX- leftX));
+			temptPointNormal[0] = Number(leftNormal[0])*(rightX-i)/(rightX-leftX)+Number(rightNormal[0])*(i-leftX)/(rightX-leftX);
+			temptPointNormal[1] = Number(leftNormal[1])*(rightX-i)/(rightX-leftX)+Number(rightNormal[1])*(i-leftX)/(rightX-leftX);
+			temptPointNormal[2] = Number(leftNormal[2])*(rightX-i)/(rightX-leftX)+Number(rightNormal[2])*(i-leftX)/(rightX-leftX);
+			temptLightString = calculateLight(ambientLight,lightsArray,renderingObject,temptPointNormal);
+			currentColorString = calculateTextureColor(temptLightString,i,currentY,temptCurentZValue);
+			if((temptZBufferValue == undefined)|| (temptCurentZValue < temptZBufferValue)){
+				setZBufferValue(i,currentY,temptCurentZValue);
+				frameBuffer[i+250][250-currentY] = currentColorString;
+			}
+		}
+	}
+
+	//Calculate light intensity for Phong illumination model
+    function calculateLight(ambientLight, dAndSLightArray,shadingObject,normal){
+    	var resultColorString = "";
+    	var temptResultSet = [];
+    	var temptSpecularTerm;
+    	var temptHVector;
+    	temptResultSet[0] = 0;
+    	temptResultSet[1] = 0;
+    	temptResultSet[2] = 0;
+    	for(var i = 0; i< dAndSLightArray.length; i++){		
+    		temptHVector = normalizeVector(vectorAddition(dAndSLightArray[i].lightNormal,normalizeVector([0,0,-1])));
+    		if(dotProduction(normalizeVector(normal),temptHVector)<0){
+    			temptSpecularTerm = 0;
+    		}
+    		else{
+    			temptSpecularTerm = Math.pow(dotProduction(normalizeVector(normal),temptHVector), 50);
+    		}
+    		if(dotProduction(normalizeVector(normal),normalizeVector(dAndSLightArray[i].lightNormal))>0){
+	    		temptResultSet[0] = temptResultSet[0] + shadingObject.diffuseR[0]*dAndSLightArray[i].red * dotProduction(normalizeVector(normal),dAndSLightArray[i].lightNormal);
+	    		temptResultSet[1] = temptResultSet[1] + shadingObject.diffuseR[1]*dAndSLightArray[i].green * dotProduction(normalizeVector(normal),dAndSLightArray[i].lightNormal);
+	    		temptResultSet[2] = temptResultSet[2] +  shadingObject.diffuseR[2]*dAndSLightArray[i].blue * dotProduction(normalizeVector(normal),dAndSLightArray[i].lightNormal);
+    		}else{
+    		}
+    		temptResultSet[0] = temptResultSet[0]+ shadingObject.specularR[0]*dAndSLightArray[i].red * temptSpecularTerm;
+    		temptResultSet[1] = temptResultSet[1]+ shadingObject.specularR[1]*dAndSLightArray[i].green * temptSpecularTerm;
+    		temptResultSet[2] = temptResultSet[2]+ shadingObject.specularR[2]*dAndSLightArray[i].blue * temptSpecularTerm;
+    	}
+    	temptResultSet[0] = temptResultSet[0] + shadingObject.ambientR[0] * ambientLight.red;
+    	temptResultSet[1] = temptResultSet[1] + shadingObject.ambientR[1] * ambientLight.green;
+    	temptResultSet[2] = temptResultSet[2] + shadingObject.ambientR[2] * ambientLight.blue;
+
+    	for(var i=0; i < temptResultSet.length;i++){
+    		if(temptResultSet[i]>1){
+    			temptResultSet[i] = 1;
+    		}
+    		else{
+    			temptResultSet[i] = temptResultSet[i];
+    		}
+    	}
+    	return temptResultSet;
+    }
+	//Calculate the color for texture
+ 	function calculateTextureColor(lightArray,x,y,z){
+    	var uIndex;
+    	var vIndex;
+    	var temptColorArray;
+    	var resultColorString = "";
+    	uIndex = Math.ceil(getU(x,z-4)*499);
+    	if(getV(x,y,z-4)>=0){
+    		vIndex = Math.ceil((500-getV(x,y,z-4)*499)-1);
+    	} else {
+    		vIndex = Math.abs(Math.ceil(getV(x,y,z-4)*499));
+    	}
+    	temptColorArray = getTextureColor(uIndex,vIndex);
+    	resultColorString = "rgb("+Math.ceil(lightArray[0]*temptColorArray[0])+","+Math.ceil(lightArray[1]*temptColorArray[1])+","+Math.ceil(lightArray[2]*temptColorArray[2])+")";
+    	return resultColorString;
+    }
+	//Find the maximum Y value in ET
+	function findYmax(table){
+		var resultValue;
+		for(var i =0;i < table.length;i++){
+			if(i == 0){
+				resultValue = table[i][0];
+			}else if(table[i][0] > resultValue){
+				resultValue = table[i][0];
+			}
+		}
+		return resultValue;
+	}
+	//Find the minimum Y value in ET
+	function findYmin(table){
+		var resultValue;
+		for(var i =0;i < table.length;i++){
+			if(i == 0){
+				resultValue = table[i][1];
+			} else if (table[i][1] < resultValue){
+				resultValue = table[i][1];
+			}
+		}
+		return resultValue;
+	}
+	//Add an edge to AET
+	function addEdgeToAET(AET, tableObject){
+		AET.splice(AET.length, 0, tableObject);
+		return AET;
+	}
+	//Remove an edge frome AET
+	function removeEdgeFromAET(AET, yValue){
+		for(var i = 0; i < AET.length ; i++){
+			if(AET[i][0]==yValue){
+				AET.splice(i,1);
+				i=i-1;
+			}
+			else{}
+		}
+		return AET;
+	}
+	//Sort AET by X values
+	function sortAETByX(a,b){
+		return a[2] - b[2];
+	}
+	//Update the X values in AET
+	function updateXcoordinate(AET){
+			var numerator;
+			var demominator;		
+			var xVarition; 
+
+			for(var i = 0; i < AET.length;i++){
+				var temptObject;
+				temptObject = AET[i][3].split("/");
+				numerator = Number(temptObject[0]);
+				demominator = Number(temptObject[1]);
+				AET[i][2] = AET[i][2] + numerator/demominator;
+			}
+			return AET;
+	}
+
+	//Calcualte the z value of an edge
+	function getEdgeZ(topY,bottomY,topZ,bottomZ,cureentY){
+		var resultZValue = topZ-(topZ-bottomZ)*((topY- cureentY)/(topY- bottomY));
+		return resultZValue;
+	}
+	//Get Z value from z-buffer according to x and y values
+	function getZBufferValue(x,y){
+		x = 250+Math.ceil(x);
+		y = 250-Math.ceil(y);
+		return zBuffer[x][y];
+	}
+	//Write into Z-buffer
+	function setZBufferValue(x,y,value){
+		x = 250+Math.ceil(x);
+		y = 250-Math.ceil(y);
+		zBuffer[x][y] = value;
+	}
+	
+	//Calculate the light intensity and normal of the vertex
+	function getEdgeE(topY,bottomY,topE,bottomE,currentY){
+		var resultE;
+		if(shadingModel == "gouraud"){
+			var red,green,blue;
+			var rgbArray = topE.split("(");
+			rgbArray = rgbArray[1].split(")");
+			rgbArray = rgbArray[0].split(",");
+
+			var rgbArray2 = bottomE.split("(");
+			rgbArray2 = rgbArray2[1].split(")");
+			rgbArray2 = rgbArray2[0].split(",");
+
+			red = Math.ceil(Number(rgbArray2[0])*(topY-currentY)/(topY-bottomY)+Number(rgbArray[0])*(currentY-bottomY)/(topY-bottomY));
+			green = Math.ceil(Number(rgbArray2[1])*(topY-currentY)/(topY-bottomY)+Number(rgbArray[1])*(currentY-bottomY)/(topY-bottomY));
+			blue = Math.ceil(Number(rgbArray2[2])*(topY-currentY)/(topY-bottomY)+Number(rgbArray[2])*(currentY-bottomY)/(topY-bottomY));
+			resultE = "rgb("+red+","+green+","+blue+")";
+		}else if(shadingModel == "phong"){
+			var temptPointNormal = new Array(3);
+			temptPointNormal[0] = Number(bottomE[0])*(topY-currentY)/(topY-bottomY)+Number(topE[0])*(currentY-bottomY)/(topY-bottomY);
+			temptPointNormal[1] = Number(bottomE[1])*(topY-currentY)/(topY-bottomY)+Number(topE[1])*(currentY-bottomY)/(topY-bottomY);
+			temptPointNormal[2] = Number(bottomE[2])*(topY-currentY)/(topY-bottomY)+Number(topE[2])*(currentY-bottomY)/(topY-bottomY);
+			resultE = temptPointNormal; 
+		}
+		return resultE;
+	}
+
+	//Coloring
+	function drawFrameBuffer(){
+		for(var i=0;i<500;i++){
+			for(var j=0; j<500;j++){
+				if(frameBuffer[i][j] != undefined){
+					var temptColorString = frameBuffer[i][j];
+					context.fillStyle = temptColorString;
+  					context.fillRect(i,j,1,1);		
+				}
+			}
+		}
+	}
+
+	//Create a random color
+	function randomColor(){
+		var redValue = Math.floor((Math.random() * 255));
+		var greenVlue = Math.floor((Math.random() * 255));
+		var blueValue = Math.floor((Math.random() * 255));
+		var colorString = "rgb("+redValue+","+greenVlue+","+blueValue+")";
+		return colorString;
+	}
+	//Vector normalization
+    function normalizeVector(inputVector){
+    	var resultVector = [];
+    	var temptSum =0;
+    	var vectorMagnitude;
+    	for(var i = 0; i < inputVector.length ; i++){
+    		temptSum = temptSum + inputVector[i]*inputVector[i];
+    	}
+    	vectorMagnitude = Math.sqrt(temptSum);
+    	for(var i = 0; i < inputVector.length ; i++){
+    		resultVector[i] = inputVector[i]/vectorMagnitude;
+    	}
+    	return resultVector;
+    }
+    //Calculate a vertex normal
+    function getvertexNormal(pointIndex){
+    	var resultUintNormal;
+    	var collectiveNormal = [0,0,0];   
+	    for(var i =0; i <pointPolygons[pointIndex].length;i++){
+	    	collectiveNormal = normalizeVector(vectorAddition(collectiveNormal, normalizeVector(polyNormal[pointPolygons[pointIndex][i]])));
+	    }
+	   	resultUintNormal = collectiveNormal;
+	    return resultUintNormal;
+    }	
+        
+    //Get the rgb values accoording to the u & v values
+    function getTextureColor(u,v){
+    	var resultColorString;
+    	var temptColorString = new Array(3);
+    	temptColorString[0] = Number(textureData.data[4*(v*500+u)+0]);
+    	temptColorString[1] = Number(textureData.data[4*(v*500+u)+1]);
+    	temptColorString[2] = Number(textureData.data[4*(v*500+u)+2]);
+    	return temptColorString;
+    }
+
+    //Calculate the u value of the texture
+    function getU(x,z){
+		var phaseCoe = 0;
+		var xValue = Math.abs(x);
+		var zValue = Math.abs(z);
+		var resultU;
+		if(x == 0){
+			if(z>0){
+				return 0.25;
+			}else{
+				return 0.75;
+			}
+		}else if( z == 0){
+			if(x>0){
+				return 0;
+			}else{
+				return 0.5;
+			}
+		}
+		if(x >0 && z >0){
+			phaseCoe = 0;
+		}
+		else if(x < 0 && z > 0){
+			phaseCoe = 0.5; 
+		}
+		else if( x<0 && z <0){
+			phaseCoe = 1;
+		}
+		else if( x >0 &&z <0){
+			phaseCoe = 1.5;
+		}
+		resultU = (Math.atan(zValue/xValue)+(phaseCoe*Math.PI))/(2*Math.PI);
+		return resultU;
+	}
+	//Calcualte the v value of the texture
+	function getV(x,y,z){
+		var magtitude = Math.sqrt(Math.pow(x, 2)+Math.pow(z,2));
+		var yValue = y;
+		var resultV = (1/(2*Math.PI))/(yValue/magtitude);
+		if(resultV >1){
+			resultV=1;
+		}else if(resultV<-1){
+			resultV=-1;
+		}
+		return resultV;
+	}
+		
+    //Illumination
+    //Ambient light
+    function AmbientLightObject(lightString){
+		var rgbArray = lightString.split("(");
+			rgbArray = rgbArray[1].split(")");
+			rgbArray = rgbArray[0].split(",");
+		this.red = Number(rgbArray[0]);
+		this.green = Number(rgbArray[1]);
+		this.blue = Number(rgbArray[2]);
+	}
+	//Diffuse and specular light
+	function LightObject(lightString, lightNormal){
+		var rgbArray = lightString.split("(");
+			rgbArray = rgbArray[1].split(")");
+			rgbArray = rgbArray[0].split(",");
+		this.red = Number(rgbArray[0]);
+		this.green = Number(rgbArray[1]);
+		this.blue = Number(rgbArray[2]);
+		this.lightNormal = normalizeVector(lightNormal);
+	}
+
+	//Reflectance presented in an array of rgb
+	function shadingObject(ambientReflectance, diffuseReflectance, specularReflectance){
+	 	this.ambientR = ambientReflectance;
+	 	this.diffuseR = diffuseReflectance;
+	 	this.specularR = specularReflectance;
+	}
+	
+	//Draw a polygon in the order of point indices
+	function drawPolygon(cubeIndex, coordinatesArray){
+		var context = drawing.getContext("2d");
+		//Start with the first point
+		context.moveTo(Math.ceil((coordinatesArray[cubeIndex[0]-1][0])*50+250),Math.ceil(250-(coordinatesArray[cubeIndex[0]-1][1])*50));
+		for(var i=1;i<cubeIndex.length;i++){	
+		context.lineTo(Math.ceil((coordinatesArray[cubeIndex[i]-1][0])*50+250),Math.ceil(250-(coordinatesArray[cubeIndex[i]-1][1])*50));
+		}
+		//Go back to the first point to get a closed polygon
+		context.lineTo(Math.ceil((coordinatesArray[cubeIndex[0]-1][0])*50+250),Math.ceil(250-(coordinatesArray[cubeIndex[0]-1][1])*50));
+	}
+	//Read data files and draw polygons
+	function handleFileSelect(evt) {
+		var files = evt.target.files;
+		for (var i = 0, f; f = files[i] ; i++) {
+			var reader = new FileReader();
+			reader.onload = (function(theFile) {
+				return function(e) {
+				//Stores the data from the file
+				var line = [];
+				var readLineNumber = 1;    //Read from the second line
+				var fileContent = e.target.result;
+				var pointNumber;
+				var planeNumber;
+				var x;
+				var y;
+				var z;
+				var temptContent = [];
+
+				line = fileContent.split(/[\r\n]+/g);        
+				temptContent = line[0].split(/\s+/g);
+				pointNumber = Number(temptContent[1]);
+				planeNumber = Number(temptContent[2]);
+
+				//Read the coordinate of the points and store them in the points array
+				for(var n = 0;n < pointNumber;n++){
+					var pointsSet = [];
+					temptContent = line[readLineNumber].split(/\s+/g);
+					x = Number(temptContent[0]);
+					y = Number(temptContent[1]);
+					//Translate the coordinates of the object into camera coordinate system
+					z = Number(temptContent[2])+4;
+					 
+					pointsSet[0]= x;
+					pointsSet[1]= y;
+					pointsSet[2]= z;
+					pointsArray[n]= pointsSet;
+					readLineNumber++;
+				}
+				
+				//Create a two dimensional array to store the index of polygons a point 
+				for(var i = 0;i < pointNumber+1;i++){
+					pointPolygons[i] = new Array();
+				}
+
+				//Read the indices of the planes and store them in the pointIndex array
+				for(var n = 0; n < planeNumber; n++){
+					var indexSet = [];
+					var indexNumber = 0;
+					temptContent = line[readLineNumber].split(/\s+/g);
+					indexNumber = Number(temptContent[0]);
+					for(var j = 0; j< indexNumber; j++){
+						indexSet[j] = Number(temptContent[j+1]);
+						pointPolygons[Number(temptContent[j+1])] += n; 
+					}
+					cubeIndex[n] = indexSet;
+					readLineNumber++;
+				}
+
+				//Shows if a plane is visible or not
+				var visibility = checkVisibility(cameraPoint, pointsArray);
+				for(var j = 0; j<pointsArray.length;j++){
+					var temptObject;
+					temptObject = perspectiveTrans(coorArrayToMatrix(pointsArray[j]),3);
+					finalCoordinate[j] = matrixToCoodinate(temptObject);
+				}
+
+				//Below is the shading process
+				//Calculate all vertex normals for phong shading
+				vertexNormal[0]= [];
+				for(var i = 0; i < pointPolygons.length -1;i++){
+					vertexNormal[i+1] =  getvertexNormal(i+1);
+				}
+				//Phong shading model
+				for(var j = 0;j < cubeIndex.length;j++){
+					if(visibility[j]){
+						storePolygonGouraudAndPhongShading(createTable(getIntegerCoordinate(cubeIndex[j],finalCoordinate)));
+					}
+				}
+
+				drawFrameBuffer();
+
+				pointsArray = [];
+				cubeIndex = [];
+				finalCoordinate = [];
+				polyNormal = [];
+				pointPolygons = [];
+				};
+			})(f);
+			reader.readAsText(f);
+		}
+	}
+	document.getElementById('files').addEventListener('change', handleFileSelect, false);
+	</script>
+</body>
+</html>

@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Lab 1 & 2</title>
+	<meta charset="UTF-8" />
+		
+	<style type="text/css">	
+		#myCanvas{
+		background-color: rgb(255, 255, 255);
+		}
+	</style>	
+</head>
+<body>
+	<div><input type="file" id="files" name="files[]" multiple /></div>
+	<div><canvas id="myCanvas" width = "500" height="500"></canvas></div>
+	<div id="display1">Use ↑ ↓ ← → button to move the object</div>
+	<div id="display2">Camera Position: (0, 0, -5)</div>
+	<div id="display3">Distance = 3</div>
+	<div id="display4">1 coordinate unit contains 50 pixels</div>
+	<div id="display5">Xie Wu</div>
+	<script type="text/javascript">
+	//Frame buffer
+	var frameBuffer = new Array(500);
+	for(var i = 0; i< 500;i++){
+		frameBuffer[i] = new Array(500);
+	}
+	//Z-buffer
+	var zBuffer = new Array(500);
+	for(var i = 0; i< 500;i++){
+		zBuffer[i] = new Array(500);
+	}
+
+	//The coordinate of the points on the object
+	var pointsArray = [];
+	//The index of points
+	var pointIndex = [];
+	//Camera position
+	var cameraPoint = [0, 0, -5];
+	//Stores the coordinates after perspective transformation
+	var finalCoordinate = [];
+	//Stores the round-up coordinate for scan conversion
+	var scanlineCoordinate= [];
+	//Canvas object
+	var drawing = document.getElementById("myCanvas");
+	var result1= document.getElementById("display1");
+	var result2= document.getElementById("display2");
+	var result3= document.getElementById("display3");
+	var result4= document.getElementById("display4");
+
+	var context = drawing.getContext("2d");
+	
+
+	//Store the coordinates from a position matrix into vectors
+	function matrixToCoodinate(matrix){
+		var resultVector = [];
+		resultVector[0] = (new Number(matrix[0][0]/matrix[3][0])).toFixed(7);
+		resultVector[1] = (new Number(matrix[1][0]/matrix[3][0])).toFixed(7);
+		resultVector[2] = matrix[2][0];
+		return resultVector;
+	}
+	//Vector calculations
+	//Addition
+	function vectorAddition(vector1,vector2){
+		var result = [];
+		result[0] = vector1[0] + vector2[0];
+		result[1] = vector1[1] + vector2[1];
+		result[2] = vector1[2] + vector2[2];
+		return result;
+	}
+	//Subtraction
+	function vectorSubstraction(vector1,vector2){
+		var result = [];
+		result[0] = vector1[0] - vector2[0];
+		result[1] = vector1[1] - vector2[1];
+		result[2] = vector1[2] - vector2[2];
+		return result;
+	}
+	//Dot production
+	function dotProduction(vector1, vector2){
+		var result;
+		result = vector1[0]*vector2[0]+vector1[1]*vector2[1]+vector1[2]*vector2[2];
+		return result;
+	}
+	//Cross prodcution
+	function crossProduction(vector2, vector1){
+	 	var result = [];
+        result[0]=vector1[1]*vector2[2]-vector1[2]*vector2[1];
+        result[1]=vector1[2]*vector2[0]-vector1[0]*vector2[2];
+        result[2]=vector1[0]*vector2[1]-vector1[1]*vector2[0];
+        return result;
+	}
+	
+
+	//Matrix multiplication
+	function matrixMultiply(matrix1, matrix2) {
+ 		var aNumRows = matrix1.length, aNumCols = matrix1[0].length,
+      	bNumRows = matrix2.length, bNumCols = matrix2[0].length,
+      	resultMatrix = new Array(aNumRows);          //Rows
+  		for (var r = 0; r < aNumRows; ++r) {
+    		resultMatrix[r] = new Array(bNumCols);   //The current row
+   			for (var c = 0; c < bNumCols; ++c) {
+      			resultMatrix[r][c] = 0;              //The current cell
+				for (var i = 0; i < aNumCols; ++i) {
+					resultMatrix[r][c] += matrix1[r][i] * matrix2[i][c];
+				}
+			}
+  		}
+  		return resultMatrix;
+	}
+
+	//Divide the elements in a matrix by w
+	function matrixToCoor(matrix){
+		var resultVector = [];
+		var temptVector1 =[],temptVector2= [], temptVector3= [];
+		temptVector1[0] = (new Number(matrix[0]/matrix[3])).toFixed(7);
+		temptVector2[0] = (new Number(matrix[1]/matrix[3])).toFixed(7);
+		temptVector3[0] = (new Number(matrix[2]/matrix[3])).toFixed(7);
+		resultVector += temptVector1;
+		resultVector += temptVector2;
+		resultVector += temptVector3;
+		return resultVector;
+	}
+	//Perspective transformation of a point
+	function perspectiveTrans(pointMatrix, d){
+		var perspectiveMatrix = [];
+		var resultMatrix;
+		var dByOne = (new Number(1/d)).toFixed(7);
+		perspectiveMatrix = [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,dByOne,0]];
+		resultMatrix = matrixMultiply(perspectiveMatrix,pointMatrix);
+
+		return resultMatrix;
+	}
+	//Store the coordinates from an array into a matrix
+	function coorArrayToMatrix(coorArray, w){
+		var inputNumber = arguments.length;
+		var resultMatrix;
+		if(inputNumber == 1){
+			resultMatrix = [[coorArray[0]],[coorArray[1]],[coorArray[2]],[1]];
+		}else{
+			resultMatrix = [[coorArray[0]],[coorArray[1]],[coorArray[2]],[w]];
+		}
+		return resultMatrix;
+	}
+	//Calculate the coordinate of the midpoint on a plane to calculate its normal vector
+	function getMidPoint(coordinatePoint){
+		var result = [];
+		result[0] = coordinatePoint[0]/2;
+		result[1] = coordinatePoint[1]/2;
+		result[2] = coordinatePoint[2]/2;
+		return result;
+
+	}
+	//Check the visibility of a plane
+	function checkVisibility(cameraPoint, coordinateArray){
+		var visibility = [];
+		var planeNormalVector;
+		var lineOfSight;
+		var lineVector1;
+		var lineVector2;
+		var midPoint;
+		for(var i=0; i<pointIndex.length;i++){
+			lineVector1 = vectorSubstraction(coordinateArray[pointIndex[i][1]-1],coordinateArray[pointIndex[i][0]-1]);
+			if(pointIndex[i].length<=3){
+				lineVector2 = vectorSubstraction(coordinateArray[pointIndex[i][2]-1],coordinateArray[pointIndex[i][0]-1]);
+			}else{
+			lineVector2 = vectorSubstraction(coordinateArray[pointIndex[i][3]-1],coordinateArray[pointIndex[i][0]-1]);}
+			//Calculate the midpoint
+			midPoint = getMidPoint(vectorAddition(coordinateArray[pointIndex[i][2]-1],coordinateArray[pointIndex[i][0]-1]));
+			//Calculate the normal vector
+			planeNormalVector = crossProduction(lineVector2,lineVector1);
+			//Calculate the line of sight
+			lineOfSight = vectorSubstraction(cameraPoint,midPoint);
+			if(dotProduction(lineOfSight, planeNormalVector)>0){
+				visibility[i] = true;
+			}else {
+				visibility[i] = false;
+			}
+		}
+		return visibility;
+	}
+	
+	//Convert the values of coordinates after perspective transformation into integers
+	function getIntegerCoordinate(pointIndex, coordinatesArray){
+		var resultSet = [];
+		for(var i = 0; i < pointIndex.length; i++){
+			var temptCoordinate = [];
+			temptCoordinate[0] = Math.ceil((coordinatesArray[pointIndex[i]-1][0])*50);
+			temptCoordinate[1] = Math.ceil((coordinatesArray[pointIndex[i]-1][1])*50);
+			temptCoordinate[2] = Math.ceil((coordinatesArray[pointIndex[i]-1][2])*50);
+			resultSet[i] = temptCoordinate;
+		}
+		return resultSet;
+	}
+	//Check if a line is the bottom line or not
+	function checkBottom(planePoints,yValue){
+		var bottomOrNot = true;
+		for(var i = 0; i < planePoints.length; i++){
+			if(planePoints[i][1]>= yValue){}
+			else{
+				bottomOrNot = false;
+			}
+		}
+		return bottomOrNot;
+	}
+	//Create an edge table
+	function createTable(planePoints){
+		var tableLine = [];
+		var horizontalLX,horizontalRX,Y;
+		var point1,point2,Ymax,Ymin,Xmin, slope,topZ,bottomZ;
+		var eNumber = 0;
+		for(var n = 0 ; n < planePoints.length; n++){
+			if(n<(planePoints.length-1)){
+				point1 = planePoints[n];
+				point2 = planePoints[n+1];
+			}else{
+				point1 = planePoints[n];
+				point2 = planePoints[0];
+			}
+			if(point2[1]>point1[1]){
+				Ymax = point2[1];
+				Ymin = point1[1];
+				Xmin = point1[0];
+				topZ = point2[2];
+				bottomZ = point1[2];
+				Slope = (point1[0]-point2[0])+"/"+(point1[1]-point2[1]);
+				tableLine[eNumber] = [Ymax,Ymin,Xmin,Slope,topZ,bottomZ];
+				eNumber++;
+			}else if(point2[1]<point1[1]){
+				Ymax = point1[1];
+				Ymin = point2[1];
+				Xmin = point2[0];
+				topZ = point1[2];
+				bottomZ = point2[2];
+				Slope = (point1[0]-point2[0])+"/"+(point1[1]-point2[1]);
+				tableLine[eNumber] = [Ymax,Ymin,Xmin,Slope,topZ,bottomZ];
+				eNumber++;
+			}else{
+				if(checkBottom(planePoints,point2[1])){
+					 if(point2[0]>point1[0]){
+					 	horizontalRX = point2[0];
+					 	horizontalLX = point1[0];
+					 	Y = point2[1];
+					 }else{
+					 	horizontalRX = point1[0];
+					 	horizontalLX = point2[0];
+					 	Y= point2[1];
+					 }
+				}
+			}
+		}
+		return tableLine;
+	}
+	
+	//Find the maximum Y value in ET
+	function findYmax(table){
+		var resultValue;
+		for(var i =0; i<table.length;i++){
+			if(i == 0){
+				resultValue = table[i][0];
+			}else if(table[i][0]>resultValue){
+				resultValue = table[i][0];
+			}else{}
+		}
+		return resultValue;
+	}
+	//Find the minimum Y value in ET
+	function findYmin(table){
+		var resultValue;
+		for(var i =0; i<table.length;i++){
+			if(i == 0){
+				resultValue = table[i][1];
+			}else if(table[i][1]<resultValue){
+				resultValue = table[i][1];
+			}else{}
+		}
+		return resultValue;
+	}
+	//Add an edge to AET
+	function addEdgeToAET(AET, tableObject){
+		AET.splice(AET.length, 0, tableObject);
+		return AET;
+	}
+	//Remove an edge frome AET
+	function removeEdgeFromAET(AET, yValue){
+		for(var i = 0; i < AET.length ; i++){
+			if(AET[i][0]==yValue){
+				AET.splice(i,1);
+			}
+			else{}
+		}
+		return AET;
+	}
+	//Sort AET by X values
+	function sortAETByX(a,b){
+		return a[2] - b[2];
+	}
+	//Update the X values in AET
+	function updateXcoordinate(AET){
+			var numerator;
+			var demominator;		
+			var xVarition; 
+
+			for(var i = 0; i < AET.length;i++){
+				var temptObject;
+				temptObject = AET[i][3].split("/");
+				numerator = Number(temptObject[0]);
+				demominator = Number(temptObject[1]);
+				AET[i][2] = AET[i][2] + numerator/demominator;
+			}
+			return AET;
+	}
+	
+	//Store a polygon from the edge table into the frame buffer
+	function storePolygon(table,colorString){
+		var AET = [];
+		var currentYValue;
+		var leftX,leftZ;
+		var rightX,rightZ;
+		var topY = findYmax(table);
+		var bottomY = findYmin(table);
+		
+		for(var i = bottomY; i < topY; i++){
+			currentYValue = i;
+			for(var j = 0 ; j < table.length; j++){
+				if(table[j][1]==currentYValue){
+					AET = addEdgeToAET(AET,table[j]);
+				}else{}
+			}
+			if( AET.length >0){
+				removeEdgeFromAET(AET,currentYValue);
+				AET.sort(sortAETByX);
+				for(var k = 0; k < AET.length;k++){
+					if(k%2==1){
+						rightX = AET[k][2];
+						rightZ = getEdgeZ(AET[k][0],AET[k][1],AET[k][4],AET[k][5],currentYValue);
+						updateFrameBufferByLine(leftX,rightX,leftZ,rightZ,currentYValue,colorString);
+					}else{
+						leftX = AET[k][2];
+
+						leftZ = getEdgeZ(AET[k][0],AET[k][1],AET[k][4],AET[k][5],currentYValue);
+					}
+				}
+				updateXcoordinate(AET);
+			}
+			else{}
+		}
+	}
+	
+	//Calcualte the z value of an edge
+	function getEdgeZ(topY,bottomY,topZ,bottomZ,cureentY){
+		var resultZValue = Math.ceil(topZ-(topZ-bottomZ)*((topY- cureentY)/(topY- bottomY)));
+		return resultZValue;
+	}
+	//Get Z value from z-buffer according to x and y values
+	function getZBufferValue(x,y){
+		x = 250+Math.ceil(x);
+		y = 250-Math.ceil(y);
+		return zBuffer[x][y];
+	}
+	//Write into Z-buffer
+	function setZBufferValue(x,y,value){
+		x = 250+Math.ceil(x);
+		y = 250-Math.ceil(y);
+		zBuffer[x][y] = value;
+	}
+	//Calculate the Z value inside a polygon and update the frame buffer and z-buffer
+	function updateFrameBufferByLine(leftX,rightX,leftZ,rightZ,currentY,colorString){
+		leftX = Math.ceil(leftX);
+		rightX = Math.ceil(rightX);
+		for(var i = leftX; i <=rightX;i++){
+			var temptZBufferValue = getZBufferValue(i,currentY);
+			var temptCurentZValue = Math.ceil(rightZ-(rightZ-leftZ)*((rightX- i)/(rightX- leftX)));
+			if((temptZBufferValue == undefined)|| (temptCurentZValue < temptZBufferValue)){
+				setZBufferValue(i,currentY,temptCurentZValue);
+				frameBuffer[i+250][250-currentY] = colorString;
+			}
+		}
+	}
+	//Coloring
+	function drawFrameBuffer(){
+		for(var i=0;i<500;i++){
+			for(var j=0; j<500;j++){
+				if(frameBuffer[i][j]!=undefined){
+					var temptColorString = frameBuffer[i][j];
+					context.fillStyle = temptColorString;
+  					context.fillRect(i,j,1,1);		
+				}
+			}
+		}
+	}
+	//Create a random color
+	function randomColor(){
+		var redValue = Math.floor((Math.random() * 255));
+		var greenVlue = Math.floor((Math.random() * 255));
+		var blueValue = Math.floor((Math.random() * 255));
+		var colorString = "rgb("+redValue+","+greenVlue+","+blueValue+")";
+		return colorString;
+	}
+	//Draw a polygon in the order of point indices
+	function drawPolygon(pointIndex, coordinatesArray){
+		var context = drawing.getContext("2d");
+		//Start with the first point
+		context.moveTo(Math.ceil((coordinatesArray[pointIndex[0]-1][0])*50+250),Math.ceil(250-(coordinatesArray[pointIndex[0]-1][1])*50));
+		for(var i=1;i<pointIndex.length;i++){	
+		context.lineTo(Math.ceil((coordinatesArray[pointIndex[i]-1][0])*50+250),Math.ceil(250-(coordinatesArray[pointIndex[i]-1][1])*50));
+		}
+		//Go back to the first point to get a closed polygon
+		context.lineTo(Math.ceil((coordinatesArray[pointIndex[0]-1][0])*50+250),Math.ceil(250-(coordinatesArray[pointIndex[0]-1][1])*50));
+	}
+	//Read data files and draw polygons
+	function handleFileSelect(evt) {
+		var files = evt.target.files;
+		for (var i = 0, f; f = files[i] ; i++) {
+			var reader = new FileReader();
+			reader.onload = (function(theFile) {
+				return function(e) {
+					//Stores the data from the file
+					var line = [];
+					var readLineNumber = 1;    //Read from the second line
+					var fileContent = e.target.result;
+					var pointNumber;
+					var planeNumber;
+					var x;
+					var y;
+					var z;
+					var temptContent = [];
+
+					line = fileContent.split(/[\r\n]+/g);        
+					temptContent = line[0].split(/\s+/g);
+					pointNumber = Number(temptContent[1]);
+					planeNumber = Number(temptContent[2]);
+
+					//Read the coordinate of the points and store them in the "points" array
+					for(var n = 0; n < pointNumber; n++){
+						var pointsSet = [];
+						temptContent = line[readLineNumber].split(/\s+/g);
+						x = Number(temptContent[0]);
+						y = Number(temptContent[1]);
+						//Translate the coordinates of the object into camera coordinate system
+						z = Number(temptContent[2])+4;
+						 
+						pointsSet[0]= x;
+						pointsSet[1]= y;
+						pointsSet[2]= z;
+						pointsArray[n]= pointsSet;
+						readLineNumber++;
+					}
+					//Read the indices of the planes and store them in the "pointIndex" array
+					for(var n = 0; n < planeNumber; n++){
+						var indexSet = [];
+						var indexNumber = 0;
+						temptContent = line[readLineNumber].split(/\s+/g);
+						indexNumber = Number(temptContent[0]);
+						for(var j = 0; j< indexNumber; j++){
+							indexSet[j] = Number(temptContent[j+1]);
+						}
+						pointIndex[n] = indexSet;
+						readLineNumber++;
+					}
+					rendering();
+				};
+			})(f);
+			reader.readAsText(f);
+		}
+	}
+	
+	function clearCanvas() {  
+		var c=document.getElementById("myCanvas");  
+		var cxt=c.getContext("2d");  
+		  
+		cxt.fillStyle="#000000";  
+		cxt.beginPath();  
+		cxt.fillRect(0,0,c.width,c.height);  
+		cxt.closePath(); 
+	}
+	
+	function rendering() {
+		//Shows if a plane is visible or not
+		var visibility = checkVisibility(cameraPoint, pointsArray);
+		for(var j = 0; j<pointsArray.length;j++){
+			var temptObject;
+			temptObject = perspectiveTrans(coorArrayToMatrix(pointsArray[j]),3);
+			finalCoordinate[j] = matrixToCoodinate(temptObject);
+		}
+		//Draw the polygon
+		var context = drawing.getContext("2d");
+		var polygonColor = "rgb(220,0,0)";
+		context.beginPath();
+		for(var j = 0; j<pointIndex.length;j++){
+			if(visibility[j]){	
+				storePolygon(createTable(getIntegerCoordinate(pointIndex[j],finalCoordinate)),randomColor());
+			}
+		}
+		context.strokeStyle = "rgb(0,0,0)";
+		context.stroke();
+		drawFrameBuffer();
+	}
+	
+	document.getElementById('files').addEventListener('change', handleFileSelect, false);
+	
+	//Keyboard Control
+	document.onkeydown = function(e) {
+        e=e||window.event;
+        switch(e.keyCode){
+            case 37:    //Press ← button to move to left
+				for (var i = 0;i < pointsArray.length;i++) {
+					pointsArray[i][0] -= 0.7;
+				}
+				for(var i = 0; i< 500;i++){
+					zBuffer[i] = new Array(500);
+				}
+				for (var i = 0;i < 500;i++) {
+					for (var j = 0;j < 500;j++) {
+						frameBuffer[i][j] = "rgb("+255+","+255+","+255+")";
+					}
+				}
+				rendering();
+			break;
+            case 38:    //Press ↑ button to move upward
+				for (var i = 0;i < pointsArray.length;i++) {
+					pointsArray[i][1] += 0.7;
+				}
+				for(var i = 0; i< 500;i++){
+					zBuffer[i] = new Array(500);
+				}
+				for (var i = 0;i < 500;i++) {
+					for (var j = 0;j < 500;j++) {
+						frameBuffer[i][j] = "rgb("+255+","+255+","+255+")";
+					}
+				}
+				rendering();
+			break;
+            case 39:    //Press → button to move to right
+				for (var i = 0;i < pointsArray.length;i++) {
+					pointsArray[i][0] += 0.7;
+				}
+				for(var i = 0; i< 500;i++){
+					zBuffer[i] = new Array(500);
+				}
+				for (var i = 0;i < 500;i++) {
+					for (var j = 0;j < 500;j++) {
+						frameBuffer[i][j] = "rgb("+255+","+255+","+255+")";
+					}
+				}
+				rendering();
+			break;
+            case 40:    //Press ↓ button to move downward
+				for (var i = 0;i < pointsArray.length;i++) {
+					pointsArray[i][1] -= 0.7;
+				}
+				for(var i = 0; i< 500;i++){
+					zBuffer[i] = new Array(500);
+				}
+				for (var i = 0;i < 500;i++) {
+					for (var j = 0;j < 500;j++) {
+						frameBuffer[i][j] = "rgb("+255+","+255+","+255+")";
+					}
+				}
+				rendering();
+			break;
+        }
+    };
+	</script>
+</body>
+</html>
